@@ -36,7 +36,7 @@ struct AudioClip
     double trimStart = 0.0;
     double length = 0.0;
     bool selected = false;
-    std::unique_ptr<juce::AudioFormatReader> reader;
+    juce::AudioBuffer<float> data;
 };
 
 class Track
@@ -57,7 +57,7 @@ public:
 
     AudioClip* addClip (const juce::File& f, double startTime,
                         juce::AudioFormatManager& fm,
-                        double trim = -1.0, double len = -1.0);
+                        double targetSr, double trim = -1.0, double len = -1.0);
     void removeClip (AudioClip*);
     void splitClip (AudioClip*, double atTime);
     void prepare (double sr, int bs);

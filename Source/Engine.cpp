@@ -6,7 +6,6 @@ namespace fbd
 
 namespace
 {
-// Carica un file in modo ROBUSTO: niente rumore, niente distorsione, conteggio campioni reale
 juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, double targetSr)
 {
     const int nSrcCh = juce::jlimit (1, 2, (int) reader.numChannels);
@@ -14,7 +13,7 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
     const int capacity = (int) juce::jmin ((int64) 192000000, estLen + 65536);
 
     juce::AudioBuffer<float> raw (2, capacity);
-    raw.clear();   // <— QUESTO elimina il rumore di fondo
+    raw.clear();
 
     const int chunk = 32768;
     juce::AudioBuffer<int> iraw (nSrcCh, chunk);
@@ -43,7 +42,7 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
         if (got < toRead) break;
     }
 
-    raw.setSize (2, juce::jmax (1, total), true);   // taglia alla lunghezza REALE letta
+    raw.setSize (2, juce::jmax (1, total), true);
 
     double srcSr = reader.sampleRate > 0.0 ? reader.sampleRate : targetSr;
     if (std::abs (srcSr - targetSr) < 1.0 || total <= 1)
