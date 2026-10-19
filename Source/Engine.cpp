@@ -1,24 +1,79 @@
 #include "Engine.h"
+#include <juce_dsp/juce_dsp.h>
 
 namespace fbd
 {
 
+namespace
+{
+// Carica un file in modo ROBUSTO: niente rumore, niente distorsione, conteggio campioni reale
+juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, double targetSr)
+{
+    const int nSrcCh = juce::jlimit (1, 2, (int) reader.numChannels);
+    const int64 estLen = juce::jmax ((int64) 0, reader.lengthInSamples);
+    const int capacity = (int) juce::jmin ((int64) 192000000, estLen + 65536);
+
+    juce::AudioBuffer<float> raw (2, capacity);
+    raw.clear();   // <— QUESTO elimina il rumore di fondo
+
+    const int chunk = 32768;
+    juce::AudioBuffer<int> iraw (nSrcCh, chunk);
+    iraw.clear();
+
+    int total = 0;
+    while (total < estLen)
+    {
+        int toRead = juce::jmin (chunk, capacity - total);
+        if (toRead <= 0) break;
+
+        int* chans[2] = { iraw.getWritePointer (0),
+                          nSrcCh > 1 ? iraw.getWritePointer (1) : iraw.getWritePointer (0) };
+        int got = reader.read (chans, nSrcCh, 0, (int64) total, toRead);
+        if (got <= 0) break;
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            const int srcCh = juce::jmin (ch, nSrcCh - 1);
+            const int* src = iraw.getReadPointer (srcCh);
+            float* dst = raw.getWritePointer (ch) + total;
+            for (int i = 0; i < got; ++i)
+                dst[i] = (float) (src[i] * (1.0 / 2147483648.0));
+        }
+        total += got;
+        if (got < toRead) break;
+    }
+
+    raw.setSize (2, juce::jmax (1, total), true);   // taglia alla lunghezza REALE letta
+
+    double srcSr = reader.sampleRate > 0.0 ? reader.sampleRate : targetSr;
+    if (std::abs (srcSr - targetSr) < 1.0 || total <= 1)
+        return raw;
+
+    double ratio = srcSr / targetSr;
+    int nOut = juce::jmax (1, juce::roundToInt (total / ratio));
+    juce::AudioBuffer<float> outb (2, nOut);
+
+    const float* inputs[2] = { raw.getReadPointer (0), raw.getReadPointer (1) };
+    juce::LagrangeInterpolator interp;
+    interp.process (ratio, inputs, outb, nOut, total, 0, 2, 0);
+    return outb;
+}
+}
+
 AudioClip* Track::addClip (const juce::File& f, double startTime,
                            juce::AudioFormatManager& fm,
-                           double trim, double len)
+                           double targetSr, double trim, double len)
 {
     auto* reader = fm.createReaderFor (f);
     if (reader == nullptr) return nullptr;
 
     auto* c = new AudioClip();
     c->file = f;
-    c->reader.reset (reader);
     c->startTime = startTime;
     c->trimStart = trim >= 0.0 ? trim : 0.0;
-    double fileLen = reader->sampleRate > 0.0
-                         ? (double) reader->lengthInSamples / reader->sampleRate
-                         : 0.0;
-    c->length = len > 0.0 ? len : juce::jmax (0.01, fileLen - c->trimStart);
+    c->data = loadAndResample (*reader, targetSr);
+    double dataSec = targetSr > 0.0 ? (double) c->data.getNumSamples() / targetSr : 0.0;
+    c->length = len > 0.0 ? len : juce::jmax (0.01, dataSec - c->trimStart);
     fmPtr = &fm;
     return clips.add (c);
 }
@@ -30,17 +85,17 @@ void Track::removeClip (AudioClip* c)
 
 void Track::splitClip (AudioClip* c, double atTime)
 {
-    if (c == nullptr || c->reader == nullptr) return;
+    if (c == nullptr || c->data.getNumSamples() == 0) return;
     if (atTime <= c->startTime || atTime >= c->startTime + c->length) return;
 
-    double localOffset = atTime - c->startTime;              // dove dividere dentro la clip
+    double localOffset = atTime - c->startTime;
     double secondTrim  = c->trimStart + localOffset;
     double secondLen   = c->length - localOffset;
     c->length = localOffset;
 
     auto* second = new AudioClip();
     second->file = c->file;
-    second->reader.reset (fmPtr != nullptr ? fmPtr->createReaderFor (second->file) : nullptr);
+    second->data = c->data;
     second->startTime = atTime;
     second->trimStart = secondTrim;
     second->length = secondLen;
@@ -88,7 +143,7 @@ void Track::render (juce::AudioBuffer<float>& out, juce::MidiBuffer& mb, double 
         double blockEnd = posSec + blockDur;
         for (auto* c : clips)
         {
-            if (c->reader == nullptr) continue;
+            if (c->data.getNumSamples() == 0) continue;
             double cEnd = c->startTime + c->length;
             if (blockEnd <= c->startTime || posSec >= cEnd) continue;
 
@@ -99,11 +154,14 @@ void Track::render (juce::AudioBuffer<float>& out, juce::MidiBuffer& mb, double 
             if (nSamples <= 0) continue;
 
             double fileTime = c->trimStart + (visStart - c->startTime);
-            juce::int64 readerPos = juce::roundToInt (fileTime * c->reader->sampleRate);
-            nSamples = (int) juce::jmin ((juce::int64) nSamples, c->reader->lengthInSamples - readerPos);
+            int dataPos = juce::roundToInt (fileTime * srStored);
+            nSamples = juce::jmin (nSamples, c->data.getNumSamples() - dataPos);
             if (nSamples <= 0) continue;
 
-            c->reader->read (&out, destStart, nSamples, readerPos, true, true);
+            for (int ch = 0; ch < out.getNumChannels(); ++ch)
+                out.addFrom (ch, destStart, c->data,
+                             juce::jmin (ch, c->data.getNumChannels() - 1),
+                             dataPos, nSamples, 1.0f);
         }
     }
 
@@ -152,7 +210,7 @@ AudioClip* Engine::addAudioFileToTrack (Track& t, const juce::File& f,
                                         double startTime, double trim, double len)
 {
     if (! t.isMidi)
-        return t.addClip (f, startTime, audioFormatManager, trim, len);
+        return t.addClip (f, startTime, audioFormatManager, sampleRate, trim, len);
     return nullptr;
 }
 
