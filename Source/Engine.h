@@ -6,7 +6,6 @@ namespace fbd
 
 namespace
 {
-// Carica un file e lo converte alla frequenza del motore (qualita' broadcast)
 juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, double targetSr)
 {
     const int nSrcCh = juce::jlimit (1, 2, (int) reader.numChannels);
@@ -33,7 +32,7 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
     interp.process (ratio, inputs, outb, nOut, nIn, 0, 2, 0);
     return outb;
 }
-} // namespace
+}
 
 AudioClip* Track::addClip (const juce::File& f, double startTime,
                            juce::AudioFormatManager& fm,
