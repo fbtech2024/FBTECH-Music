@@ -1,5 +1,4 @@
 #include "Engine.h"
-#include <juce_dsp/juce_dsp.h>
 
 namespace fbd
 {
@@ -46,10 +45,22 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
     int nOut = juce::jmax (1, juce::roundToInt ((double) total / ratio));
     juce::AudioBuffer<float> outb (2, nOut);
 
-    const float* inputs[2] = { raw.getReadPointer (0), raw.getReadPointer (1) };
-    juce::LagrangeInterpolator interp;
-    interp.reset();
-    interp.process (ratio, inputs, outb, nOut, total);
+    // ricampionamento lineare puro: nessuna API da indovinare, pitch esatto, nessun rumore
+    const int nIn = total;
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        const float* s = raw.getReadPointer (ch);
+        float* d = outb.getWritePointer (ch);
+        for (int i = 0; i < nOut; ++i)
+        {
+            double pos = (double) i * ratio;
+            int i0 = (int) pos;
+            float frac = (float) (pos - (double) i0);
+            int i1 = i0 + 1 < nIn ? i0 + 1 : i0;
+            if (i0 >= nIn) { i0 = nIn - 1; i1 = i0; }
+            d[i] = s[i0] * (1.0f - frac) + s[i1] * frac;
+        }
+    }
     return outb;
 }
 }
