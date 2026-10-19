@@ -45,15 +45,11 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
     double ratio = srcSr / targetSr;
     int nOut = juce::jmax (1, juce::roundToInt ((double) total / ratio));
     juce::AudioBuffer<float> outb (2, nOut);
-    juce::AudioBuffer<float> tmp (1, nOut);
 
+    const float* inputs[2] = { raw.getReadPointer (0), raw.getReadPointer (1) };
     juce::LagrangeInterpolator interp;
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        interp.reset();
-        interp.process (ratio, raw.getReadPointer (ch), tmp, nOut, total);
-        outb.copyFrom (ch, 0, tmp, 0, 0, nOut);
-    }
+    interp.reset();
+    interp.process (ratio, inputs, outb, nOut, total);
     return outb;
 }
 }
