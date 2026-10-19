@@ -6,6 +6,11 @@ if(NOT DEFINED JUCE_DIR)
 endif()
 add_subdirectory(${JUCE_DIR} JUCE_build)
 
+# Ricrea l'icona dai byte base64 (funziona anche con il vecchio build.yml)
+if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Resources/logo.b64" AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Resources/logo.ico")
+    execute_process(COMMAND powershell -NoProfile -Command "$b64 = Get-Content -Raw '${CMAKE_CURRENT_SOURCE_DIR}/Resources/logo.b64'; [IO.File]::WriteAllBytes('${CMAKE_CURRENT_SOURCE_DIR}/Resources/logo.ico', [Convert]::FromBase64String($b64))")
+endif()
+
 juce_add_gui_app(FBTECHMusic
     PRODUCT_NAME "FBTECH Music"
     COMPANY_NAME "FBTech"
