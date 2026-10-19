@@ -9,15 +9,15 @@ namespace
 juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, double targetSr)
 {
     const int nSrcCh = juce::jlimit (1, 2, (int) reader.numChannels);
-    const int64 estLen = juce::jmax ((int64) 0, reader.lengthInSamples);
-    const int capacity = (int) juce::jmin ((int64) 192000000, estLen + 65536);
+    const juce::int64 estLen = juce::jmax ((juce::int64) 0, reader.lengthInSamples);
+    const int capacity = (int) juce::jmin ((juce::int64) 192000000, estLen + (juce::int64) 65536);
 
     juce::AudioBuffer<float> raw (2, capacity);
     raw.clear();
 
     const int chunk = 32768;
-    juce::AudioBuffer<int> iraw (nSrcCh, chunk);
-    iraw.clear();
+    juce::AudioBuffer<float> chunkBuf (2, chunk);
+    chunkBuf.clear();
 
     int total = 0;
     while (total < estLen)
@@ -25,21 +25,15 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
         int toRead = juce::jmin (chunk, capacity - total);
         if (toRead <= 0) break;
 
-        int* chans[2] = { iraw.getWritePointer (0),
-                          nSrcCh > 1 ? iraw.getWritePointer (1) : iraw.getWritePointer (0) };
-        int got = reader.read (chans, nSrcCh, 0, (int64) total, toRead);
-        if (got <= 0) break;
+        float* chans[2] = { chunkBuf.getWritePointer (0),
+                           chunkBuf.getWritePointer (nSrcCh > 1 ? 1 : 0) };
+        if (! reader.read (chans, nSrcCh, (juce::int64) total, toRead))
+            break;
 
         for (int ch = 0; ch < 2; ++ch)
-        {
-            const int srcCh = juce::jmin (ch, nSrcCh - 1);
-            const int* src = iraw.getReadPointer (srcCh);
-            float* dst = raw.getWritePointer (ch) + total;
-            for (int i = 0; i < got; ++i)
-                dst[i] = (float) (src[i] * (1.0 / 2147483648.0));
-        }
-        total += got;
-        if (got < toRead) break;
+            raw.copyFrom (ch, total, chunkBuf, juce::jmin (ch, nSrcCh - 1), 0, toRead);
+
+        total += toRead;
     }
 
     raw.setSize (2, juce::jmax (1, total), true);
@@ -49,12 +43,17 @@ juce::AudioBuffer<float> loadAndResample (juce::AudioFormatReader& reader, doubl
         return raw;
 
     double ratio = srcSr / targetSr;
-    int nOut = juce::jmax (1, juce::roundToInt (total / ratio));
+    int nOut = juce::jmax (1, juce::roundToInt ((double) total / ratio));
     juce::AudioBuffer<float> outb (2, nOut);
+    juce::AudioBuffer<float> tmp (1, nOut);
 
-    const float* inputs[2] = { raw.getReadPointer (0), raw.getReadPointer (1) };
     juce::LagrangeInterpolator interp;
-    interp.process (ratio, inputs, outb, nOut, total, 0, 2, 0);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        interp.reset();
+        interp.process (ratio, raw.getReadPointer (ch), tmp, nOut, total);
+        outb.copyFrom (ch, 0, tmp, 0, 0, nOut);
+    }
     return outb;
 }
 }
