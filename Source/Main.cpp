@@ -4,12 +4,12 @@ class FBTECHMusicApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override    { return "FBTECH Music"; }
-    const juce::String getApplicationVersion() override { return "0.5.0"; }
+    const juce::String getApplicationVersion() override { return "0.5.1"; }
     bool moreThanOneInstanceAllowed() override          { return false; }
 
     void initialise (const juce::String&) override
     {
-        mainWindow = std::make_unique<MainWindow> ("FBTECH Music", new fbd::MainComponent());
+        mainWindow = std::make_unique<MainWindow> ("FBTECH Music 0.5.1", new fbd::MainComponent());
     }
     void shutdown() override { mainWindow = nullptr; }
     void systemRequestedQuit() override { quit(); }

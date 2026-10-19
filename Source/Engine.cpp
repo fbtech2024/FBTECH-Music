@@ -262,7 +262,14 @@ void Engine::processBlockInternal (juce::AudioBuffer<float>& out, int numSamples
 {
     out.clear();
     bool anySolo = false;
-    for (auto* t : tracks) if (t->solo) { anySolo = true; break; }
+    for (auto* t : tracks)
+    {
+        t->lastLevel = 0.0f;
+        if (t->solo) anySolo = true;
+    }
+
+    if (! playing && ! recording)   // da fermi: silenzio assoluto (niente blocco ripetuto)
+        return;
 
     const double blockDur = numSamples / sampleRate;
 
