@@ -90,7 +90,7 @@ Engine::Engine()
     formatManager.addDefaultFormats();
     deviceManager.initialise (2, 2, nullptr, true);
     deviceManager.addAudioCallback (this);
-    scanDefaultVst3Folders();
+    // NIENTE scansione VST3 all'avvio: la faremo su richiesta
 }
 
 Engine::~Engine()
@@ -342,16 +342,4 @@ bool Engine::exportToWav (const juce::File& outFile, std::function<void(double)>
     play();
     juce::AudioBuffer<float> buf (2, blockSize);
     double totalBlocks = std::ceil (len * sampleRate / blockSize);
-    for (long i = 0; i < (long) totalBlocks; ++i)
-    {
-        processBlockInternal (buf, blockSize);
-        writerPtr->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
-        if (progress) progress ((double) i / totalBlocks);
-        juce::Thread::sleep (1);
-    }
-    stop();
-    setPosition (0.0);
-    return true;
-}
-
-} // namespace fbd
+    for (long i = 0; i < (long) totalBlocks;
