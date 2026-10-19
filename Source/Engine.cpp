@@ -354,8 +354,8 @@ void Engine::scanVst3Async (std::function<void(int)> onDone)
         while (scanner.scanNextFile (true, nm)) {}
 
         juce::Array<juce::PluginDescription> found;
-        for (auto* d : local.getTypes())
-            found.add (*d);
+        for (auto& d : local.getTypes())
+            found.add (d);
 
         juce::MessageManager::callAsync ([this, found, onDone]
         {
