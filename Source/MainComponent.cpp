@@ -39,6 +39,12 @@ MainComponent::MainComponent()
     lblPos.setColour (juce::Label::textColourId, Neon::cyan);
     addAndMakeVisible (lblStatus);
 
+    addAndMakeVisible (lblTitle);
+    lblTitle.setText ("FBTECH MUSIC", juce::dontSendNotification);
+    lblTitle.setFont (juce::Font (juce::Font::getDefaultSansSerifFontName(), 24.0f, juce::Font::bold));
+    lblTitle.setColour (juce::Label::textColourId, Neon::cyan);
+    lblTitle.setJustificationType (juce::Justification::centredRight);
+
     addAndMakeVisible (midiInputList);
     midiInputList.addListener (this);
     auto inputs = juce::MidiInput::getAvailableDevices();
@@ -346,6 +352,26 @@ void MainComponent::rebuildViews()
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (Neon::bg0);
+
+    // LOGO FBTECH: monogramma FB con gradiente azzurro->rosa + onde audio
+    {
+        auto r = juce::Rectangle<float> (16.0f, 30.0f, 32.0f, 32.0f);
+        juce::ColourGradient grad (Neon::cyan, r.getX(), r.getY(),
+                                   Neon::pink, r.getRight(), r.getBottom(), false);
+        g.setGradientFill (grad);
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (Neon::bg0);
+        g.setFont (juce::Font (juce::Font::getDefaultSansSerifFontName(), 19.0f, juce::Font::bold));
+        g.drawText ("FB", r, juce::Justification::centred);
+        g.setColour (Neon::green);
+        for (int i = 0; i < 4; ++i)
+        {
+            float bh = 3.0f + 3.0f * (float) ((i * 37) % 5) / 4.0f;
+            g.fillRoundedRectangle (r.getX() + 3.0f + (float) i * 7.5f, r.getBottom() + 2.0f,
+                                    4.5f, bh, 2.0f);
+        }
+    }
+
     double pos = engine.getPosition();
     float x = (float) (pos * pxPerSec) - (float) arrangeView.getViewPositionX();
     g.setColour (Neon::pink);
@@ -357,11 +383,13 @@ void MainComponent::resized()
     auto r = getLocalBounds().reduced (6);
     menuBar.setBounds (r.removeFromTop (24));
     auto top = r.removeFromTop (40);
+    top.removeFromLeft (44); // spazio per il logo FBTECH
     for (auto* bt : { &btnRec, &btnPlay, &btnStop, &btnRew, &btnAddAudio, &btnAddMidi })
         bt->setBounds (top.removeFromLeft (88).reduced (2));
     btnExport.setBounds (top.removeFromLeft (100).reduced (2));
     midiInputList.setBounds (top.removeFromLeft (230).reduced (2));
     lblPos.setBounds (top.removeFromLeft (170));
+    lblTitle.setBounds (top.reduced (10, 0));
     auto bottom = r.removeFromBottom (22);
     lblStatus.setBounds (bottom);
 

@@ -42,7 +42,7 @@ private:
     juce::TextButton btnRec { "REC" }, btnPlay { "PLAY" }, btnStop { "STOP" },
                      btnRew { "|<<" }, btnAddAudio { "+ AUDIO" }, btnAddMidi { "+ MIDI" },
                      btnExport { "EXPORT" };
-    juce::Label lblPos, lblStatus;
+    juce::Label lblPos, lblStatus, lblTitle;
 
     struct TrackLane : juce::Component
     {
