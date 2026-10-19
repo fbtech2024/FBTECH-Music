@@ -33,7 +33,7 @@ void Track::splitClip (AudioClip* c, double atTime)
     if (c == nullptr || c->reader == nullptr) return;
     if (atTime <= c->startTime || atTime >= c->startTime + c->length) return;
 
-    double localOffset = atTime - c->startTime;              // dove dividere dentro la clip
+    double localOffset = atTime - c->startTime;
     double secondTrim  = c->trimStart + localOffset;
     double secondLen   = c->length - localOffset;
     c->length = localOffset;
@@ -99,8 +99,8 @@ void Track::render (juce::AudioBuffer<float>& out, juce::MidiBuffer& mb, double 
             if (nSamples <= 0) continue;
 
             double fileTime = c->trimStart + (visStart - c->startTime);
-            int64 readerPos = juce::roundToInt (fileTime * c->reader->sampleRate);
-            nSamples = (int) juce::jmin ((int64) nSamples, c->reader->lengthInSamples - readerPos);
+            juce::int64 readerPos = juce::roundToInt (fileTime * c->reader->sampleRate);
+            nSamples = (int) juce::jmin ((juce::int64) nSamples, c->reader->lengthInSamples - readerPos);
             if (nSamples <= 0) continue;
 
             c->reader->read (&out, destStart, nSamples, readerPos, true, true);
@@ -326,7 +326,9 @@ bool Engine::loadProject (const juce::File& f)
             else if (cx->hasTagName ("MIDI"))
             {
                 juce::MemoryBlock mb;
-                if (juce::Base64::convertFromBase64 (mb, cx->getStringAttribute ("data")))
+                juce::MemoryOutputStream mos (mb, false);
+                if (juce::Base64::convertFromBase64 (mos, cx->getStringAttribute ("data"))
+                        && mb.getSize() > 0)
                 {
                     juce::MidiMessage m (mb.getData(), (int) mb.getSize());
                     m.setTimeStamp (cx->getDoubleAttribute ("time", 0.0));
@@ -342,6 +344,7 @@ void Engine::scanVst3Async (std::function<void(int)> onDone)
 {
     if (scanning) return;
     scanning = true;
+    if (vstScanThread.joinable()) vstScanThread.join();
     vstScanThread = std::thread ([this, onDone]
     {
         juce::KnownPluginList local;
@@ -349,11 +352,18 @@ void Engine::scanVst3Async (std::function<void(int)> onDone)
         juce::PluginDirectoryScanner scanner (local, fmt, fmt.getDefaultLocationsToSearch(), true, juce::File());
         juce::String nm;
         while (scanner.scanNextFile (true, nm)) {}
-        juce::MessageManager::callAsync ([this, local, onDone]() mutable
+
+        juce::Array<juce::PluginDescription> found;
+        for (auto* d : local.getTypes())
+            found.add (*d);
+
+        juce::MessageManager::callAsync ([this, found, onDone]
         {
-            pluginList = local;
+            pluginList.clear();
+            for (auto& d : found)
+                pluginList.addType (d);
             scanning = false;
-            if (onDone) onDone (pluginList.getTypes().size());
+            if (onDone) onDone (found.size());
         });
     });
 }
