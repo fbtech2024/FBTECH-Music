@@ -10,7 +10,8 @@ class MixerStrip;
 class MainComponent : public juce::Component,
                       public juce::Timer,
                       public juce::Button::Listener,
-                      public juce::ComboBox::Listener
+                      public juce::ComboBox::Listener,
+                      public juce::MenuBarModel
 {
 public:
     MainComponent();
@@ -21,12 +22,22 @@ public:
     void timerCallback() override;
     void buttonClicked (juce::Button*) override;
     void comboBoxChanged (juce::ComboBox*) override;
+    bool keyPressed (const juce::KeyPress&) override;
+
+    // MenuBarModel
+    juce::StringArray getMenuBarNames() override { return { "File", "Traccia", "VST", "?" }; }
+    juce::PopupMenu getMenuForIndex (int menuIndex, const juce::String&) override;
+    void menuItemSelected (int menuItemID, int) override;
 
     void showPluginMenu (Track&, bool forInstrument);
+
+    Track* getSelectedTrack() { return selectedTrack; }
+    void selectTrack (Track* t) { selectedTrack = t; arrangeContent.repaint(); }
 
 private:
     Engine engine;
     FBLookAndFeel laf;
+    juce::MenuBarComponent menuBar;
 
     juce::TextButton btnRec { "REC" }, btnPlay { "PLAY" }, btnStop { "STOP" },
                      btnRew { "|<<" }, btnAddAudio { "+ AUDIO" }, btnAddMidi { "+ MIDI" },
@@ -35,58 +46,13 @@ private:
 
     struct TrackLane : juce::Component
     {
-        TrackLane (MainComponent& o, Track* t) : owner (o), track (t)
-        {
-            setInterceptsMouseClicks (false, false);
-        }
-        void paint (juce::Graphics& g) override
-        {
-            auto r = getLocalBounds();
-            g.fillAll (track->armed ? Neon::pink.withAlpha (0.09f) : Neon::bg1);
-            g.setColour (Neon::panel);
-            g.drawRect (r);
-
-            auto head = r.removeFromLeft (150);
-            g.setColour (Neon::bg0);
-            g.fillRect (head);
-            g.setColour (Neon::text);
-            g.setFont (14.0f);
-            g.drawText (track->name, head.reduced (8, 0), juce::Justification::centredLeft);
-            g.setFont (11.0f);
-            g.setColour (track->isMidi ? Neon::pink.withAlpha (0.9f) : Neon::cyan.withAlpha (0.9f));
-            g.drawText (track->isMidi ? "MIDI" : "AUDIO",
-                        head.reduced (8, 0).withTrimmedTop (20),
-                        juce::Justification::centredLeft);
-            g.setColour (Neon::text.withAlpha (0.4f));
-            juce::String flags;
-            if (track->mute) flags << "M ";
-            if (track->solo) flags << "S ";
-            if (track->armed) flags << "REC";
-            g.drawText (flags, head.reduced (8, 0).withTrimmedTop (36),
-                        juce::Justification::centredLeft);
-
-            auto area = r.reduced (4).withTrimmedTop (8);
-            if (! track->isMidi && track->readerSource != nullptr)
-            {
-                g.setColour (Neon::cyan.withAlpha (0.85f));
-                track->thumb().drawChannels (g, area, 0.0, track->fileLength(), 1.0f);
-            }
-            else if (track->isMidi)
-            {
-                for (int i = 0; i < track->midi.getNumEvents(); ++i)
-                {
-                    auto* ev = track->midi.getEventPointer (i);
-                    auto& msg = ev->message;
-                    if (! msg.isNoteOn()) continue;
-                    float x = area.getX() + (float) (msg.getTimeStamp() / 60.0) * owner.pxPerSec;
-                    if (x > area.getRight()) break;
-                    int note = msg.getNoteNumber();
-                    float y = area.getY() + area.getHeight() * (1.0f - (float) note / 127.0f);
-                    g.setColour (Neon::pink.withAlpha (0.5f + 0.5f * msg.getFloatVelocity()));
-                    g.fillRect (x, y, 4.0f, juce::jmax (3.0f, area.getHeight() * 0.03f));
-                }
-            }
-        }
+        TrackLane (MainComponent& o, Track* t) : owner (o), track (t) {}
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseDoubleClick (const juce::MouseEvent& e) override;
+        double timeAt (int x) const { return juce::jmax (0.0, (x - 150) / owner.pxPerSec); }
+        AudioClip* clipAt (double t);
         MainComponent& owner;
         Track* track;
     };
@@ -100,8 +66,14 @@ private:
 
     juce::ComboBox midiInputList;
     double pxPerSec = 100.0;
+    Track* selectedTrack = nullptr;
+    double dragOffset = 0.0;
 
     void rebuildViews();
+    void importAudio();
+    void saveProject();
+    void openProject();
+    void splitSelectedClip();
     juce::File lastAudioDir;
 
     JUCE_DECLARE_NON_COPYABLE (MainComponent)
@@ -116,6 +88,7 @@ public:
     {
         addAndMakeVisible (slider);
         slider.setSliderStyle (juce::Slider::LinearVertical);
+        slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         slider.setRange (0.0, 2.0, 0.01);
         slider.setValue (1.0);
         slider.addListener (this);
@@ -139,8 +112,9 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (Neon::bg1);
-        g.setColour (Neon::panel);
+        bool sel = owner.getSelectedTrack() == track;
+        g.fillAll (sel ? Neon::cyan.withAlpha (0.10f) : Neon::bg1);
+        g.setColour (sel ? Neon::cyan : Neon::panel);
         g.drawRect (getLocalBounds());
 
         auto meterArea = getLocalBounds().reduced (4).removeFromRight (9);

@@ -3,42 +3,53 @@
 namespace fbd
 {
 
-void Track::loadFile (const juce::File& f, juce::AudioFormatManager& fm)
+AudioClip* Track::addClip (const juce::File& f, double startTime,
+                           juce::AudioFormatManager& fm,
+                           double trim, double len)
 {
-    if (auto* reader = fm.createReaderFor (f))
-    {
-        if (readerSource != nullptr) readerSource->releaseResources();
-        readerSource = new juce::AudioFormatReaderSource (reader, true);
-        player.setSource (readerSource, 4096, &readerThread);
-        fmPtr = &fm;
-        ensureThumb();
-        thumbnail->setSource (new juce::FileInputSource (f));
-    }
+    auto* reader = fm.createReaderFor (f);
+    if (reader == nullptr) return nullptr;
+
+    auto* c = new AudioClip();
+    c->file = f;
+    c->reader.reset (reader);
+    c->startTime = startTime;
+    c->trimStart = trim >= 0.0 ? trim : 0.0;
+    double fileLen = reader->sampleRate > 0.0
+                         ? (double) reader->lengthInSamples / reader->sampleRate
+                         : 0.0;
+    c->length = len > 0.0 ? len : juce::jmax (0.01, fileLen - c->trimStart);
+    fmPtr = &fm;
+    return clips.add (c);
 }
 
-void Track::ensureThumb()
+void Track::removeClip (AudioClip* c)
 {
-    if (thumbnail == nullptr)
-    {
-        thumbCache  = std::make_unique<juce::AudioThumbnailCache> (8);
-        thumbnail   = std::make_unique<juce::AudioThumbnail> (256, *fmPtr, *thumbCache);
-    }
+    if (c != nullptr) clips.removeObject (c);
 }
 
-juce::AudioThumbnail& Track::thumb()
+void Track::splitClip (AudioClip* c, double atTime)
 {
-    if (thumbnail == nullptr)
-    {
-        thumbCache = std::make_unique<juce::AudioThumbnailCache> (8);
-        thumbnail = std::make_unique<juce::AudioThumbnail> (256, *fmPtr, *thumbCache);
-    }
-    return *thumbnail;
+    if (c == nullptr || c->reader == nullptr) return;
+    if (atTime <= c->startTime || atTime >= c->startTime + c->length) return;
+
+    double localOffset = atTime - c->startTime;              // dove dividere dentro la clip
+    double secondTrim  = c->trimStart + localOffset;
+    double secondLen   = c->length - localOffset;
+    c->length = localOffset;
+
+    auto* second = new AudioClip();
+    second->file = c->file;
+    second->reader.reset (fmPtr != nullptr ? fmPtr->createReaderFor (second->file) : nullptr);
+    second->startTime = atTime;
+    second->trimStart = secondTrim;
+    second->length = secondLen;
+    clips.add (second);
 }
 
 void Track::prepare (double sr, int bs)
 {
     srStored = sr;
-    player.prepareToPlay (bs, sr);
     auto setupProc = [&] (juce::AudioPluginInstance& p)
     {
         p.enableAllBuses();
@@ -47,11 +58,9 @@ void Track::prepare (double sr, int bs)
     };
     if (instrument != nullptr) setupProc (*instrument);
     for (auto& f : fx) setupProc (*f);
-    nextEventTime = 0.0;
 }
 
-void Track::render (juce::AudioBuffer<float>& out, juce::MidiBuffer& mb,
-                    double posSec, double, int)
+void Track::render (juce::AudioBuffer<float>& out, juce::MidiBuffer& mb, double posSec)
 {
     out.clear();
     mb.clear();
@@ -75,13 +84,54 @@ void Track::render (juce::AudioBuffer<float>& out, juce::MidiBuffer& mb,
     }
     else
     {
-        juce::AudioSourceChannelInfo info (&out, 0, out.getNumSamples());
-        player.getNextAudioBlock (info);
+        double blockDur = out.getNumSamples() / srStored;
+        double blockEnd = posSec + blockDur;
+        for (auto* c : clips)
+        {
+            if (c->reader == nullptr) continue;
+            double cEnd = c->startTime + c->length;
+            if (blockEnd <= c->startTime || posSec >= cEnd) continue;
+
+            double visStart = juce::jmax (posSec, c->startTime);
+            double visEnd   = juce::jmin (blockEnd, cEnd);
+            int destStart = juce::roundToInt ((visStart - posSec) * srStored);
+            int nSamples  = juce::roundToInt ((visEnd - visStart) * srStored);
+            if (nSamples <= 0) continue;
+
+            double fileTime = c->trimStart + (visStart - c->startTime);
+            int64 readerPos = juce::roundToInt (fileTime * c->reader->sampleRate);
+            nSamples = (int) juce::jmin ((int64) nSamples, c->reader->lengthInSamples - readerPos);
+            if (nSamples <= 0) continue;
+
+            c->reader->read (&out, destStart, nSamples, readerPos, true, true);
+        }
     }
 
     juce::MidiBuffer empty;
     for (auto& f : fx)
         if (f != nullptr) f->processBlock (out, empty);
+}
+
+double Track::endTime() const
+{
+    double e = 0.0;
+    for (auto* c : clips) e = juce::jmax (e, c->startTime + c->length);
+    if (isMidi) e = juce::jmax (e, midi.getEndTime());
+    return e;
+}
+
+juce::AudioThumbnail* Track::thumbFor (AudioClip* c, juce::AudioFormatManager& fm)
+{
+    if (c == nullptr || ! c->file.existsAsFile()) return nullptr;
+    if (thumbCache == nullptr)
+        thumbCache = std::make_unique<juce::AudioThumbnailCache> (16);
+    auto key = c->file.getFullPathName();
+    if (thumbs[key] == nullptr)
+    {
+        thumbs[key] = std::make_unique<juce::AudioThumbnail> (256, fm, *thumbCache);
+        thumbs[key]->setSource (new juce::FileInputSource (c->file));
+    }
+    return thumbs[key].get();
 }
 
 Engine::Engine()
@@ -94,16 +144,16 @@ Engine::Engine()
 
 Engine::~Engine()
 {
+    if (vstScanThread.joinable()) vstScanThread.join();
     deviceManager.removeAudioCallback (this);
 }
 
-void Engine::scanDefaultVst3Folders()
+AudioClip* Engine::addAudioFileToTrack (Track& t, const juce::File& f,
+                                        double startTime, double trim, double len)
 {
-    auto folders = vst3Format.getDefaultLocationsToSearch();
-    juce::PluginDirectoryScanner scanner (pluginList, vst3Format, folders, true, juce::File());
-    juce::String name;
-    while (scanner.scanNextFile (true, name))
-        juce::Logger::writeToLog ("Scansione: " + name);
+    if (! t.isMidi)
+        return t.addClip (f, startTime, audioFormatManager, trim, len);
+    return nullptr;
 }
 
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* device)
@@ -143,10 +193,7 @@ void Engine::prepareToPlay (int samplesPerBlockExpected, double newSampleRate)
     for (auto* t : tracks) t->prepare (sampleRate, samplesPerBlockExpected);
 }
 
-void Engine::releaseResources()
-{
-    for (auto* t : tracks) t->player.releaseResources();
-}
+void Engine::releaseResources() {}
 
 void Engine::processBlockInternal (juce::AudioBuffer<float>& out, int numSamples)
 {
@@ -160,7 +207,7 @@ void Engine::processBlockInternal (juce::AudioBuffer<float>& out, int numSamples
     {
         bool audible = (! t->mute) && ((! anySolo) || t->solo);
         trackBuffer.setSize (2, numSamples, false, true, true);
-        t->render (trackBuffer, midiScratch, position, sampleRate, numSamples);
+        t->render (trackBuffer, midiScratch, position);
 
         float level = trackBuffer.getRMSLevel (0, 0, numSamples);
         t->lastLevel = audible ? level * t->gain : 0.0f;
@@ -186,49 +233,28 @@ void Engine::processBlockInternal (juce::AudioBuffer<float>& out, int numSamples
 
 void Engine::play()
 {
-    if (playing) return;
     playing = true;
-    for (auto* t : tracks) if (! t->isMidi) t->player.start();
 }
 
 void Engine::stop()
 {
     playing = false;
     recording = false;
-    for (auto* t : tracks) t->player.stop();
     juce::ScopedLock sl (recLock);
     writer.reset();
 }
 
 void Engine::toggleRecord()
 {
-    if (! playing) { play(); recording = true; }
+    if (! playing) { playing = true; recording = true; }
     else recording = ! recording;
-}
-
-double Engine::getPosition() const
-{
-    for (auto* t : tracks)
-        if (! t->isMidi && t->readerSource != nullptr)
-            return t->player.getCurrentPosition();
-    return position;
-}
-
-void Engine::setPosition (double sec)
-{
-    position = sec;
-    for (auto* t : tracks) if (! t->isMidi) t->player.setPosition (sec);
 }
 
 double Engine::getLength() const
 {
-    double len = 0.0;
-    for (auto* t : tracks)
-        if (! t->isMidi && t->readerSource != nullptr)
-            len = juce::jmax (len, t->readerSource->getTotalLength() / sampleRate);
-        else if (t->isMidi && t->midi.getEndTime() > 0.0)
-            len = juce::jmax (len, t->midi.getEndTime());
-    return juce::jmax (len, position);
+    double len = position;
+    for (auto* t : tracks) len = juce::jmax (len, t->endTime());
+    return len;
 }
 
 Track* Engine::addTrack (const juce::String& name, bool midi)
@@ -240,6 +266,97 @@ Track* Engine::addTrack (const juce::String& name, bool midi)
 }
 
 void Engine::removeTrack (Track* t) { if (t != nullptr) tracks.removeObject (t); }
+
+bool Engine::saveProject (const juce::File& f)
+{
+    juce::XmlElement root ("FBTECHMUSIC");
+    root.setAttribute ("version", "0.5");
+    for (auto* t : tracks)
+    {
+        auto* tx = root.createNewChildElement ("TRACK");
+        tx->setAttribute ("name", t->name);
+        tx->setAttribute ("midi", t->isMidi);
+        tx->setAttribute ("gain", (double) t->gain);
+        tx->setAttribute ("pan", (double) t->pan);
+        tx->setAttribute ("mute", t->mute);
+        tx->setAttribute ("solo", t->solo);
+        for (auto* c : t->clips)
+        {
+            auto* cx = tx->createNewChildElement ("CLIP");
+            cx->setAttribute ("file", c->file.getFullPathName());
+            cx->setAttribute ("start", c->startTime);
+            cx->setAttribute ("trim", c->trimStart);
+            cx->setAttribute ("length", c->length);
+        }
+        for (int i = 0; i < t->midi.getNumEvents(); ++i)
+        {
+            auto& m = t->midi.getEventPointer (i)->message;
+            auto* mx = tx->createNewChildElement ("MIDI");
+            mx->setAttribute ("time", m.getTimeStamp());
+            mx->setAttribute ("data", juce::Base64::toBase64 (m.getRawData(), (size_t) m.getRawDataSize()));
+        }
+    }
+    return root.writeToFile (f, {});
+}
+
+bool Engine::loadProject (const juce::File& f)
+{
+    auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! xml->hasTagName ("FBTECHMUSIC")) return false;
+    tracks.clear();
+    position = 0.0;
+    for (int i = 0; i < xml->getNumChildElements(); ++i)
+    {
+        auto* tx = xml->getChildElement (i);
+        if (! tx->hasTagName ("TRACK")) continue;
+        auto* t = addTrack (tx->getStringAttribute ("name"),
+                            tx->getBoolAttribute ("midi", false));
+        t->gain = (float) tx->getDoubleAttribute ("gain", 1.0);
+        t->pan  = (float) tx->getDoubleAttribute ("pan", 0.0);
+        t->mute = tx->getBoolAttribute ("mute", false);
+        t->solo = tx->getBoolAttribute ("solo", false);
+        for (int j = 0; j < tx->getNumChildElements(); ++j)
+        {
+            auto* cx = tx->getChildElement (j);
+            if (cx->hasTagName ("CLIP"))
+                addAudioFileToTrack (*t, juce::File (cx->getStringAttribute ("file")),
+                                     cx->getDoubleAttribute ("start", 0.0),
+                                     cx->getDoubleAttribute ("trim", -1.0),
+                                     cx->getDoubleAttribute ("length", -1.0));
+            else if (cx->hasTagName ("MIDI"))
+            {
+                juce::MemoryBlock mb;
+                if (juce::Base64::convertFromBase64 (mb, cx->getStringAttribute ("data")))
+                {
+                    juce::MidiMessage m (mb.getData(), (int) mb.getSize());
+                    m.setTimeStamp (cx->getDoubleAttribute ("time", 0.0));
+                    t->midi.addEvent (m);
+                }
+            }
+        }
+    }
+    return true;
+}
+
+void Engine::scanVst3Async (std::function<void(int)> onDone)
+{
+    if (scanning) return;
+    scanning = true;
+    vstScanThread = std::thread ([this, onDone]
+    {
+        juce::KnownPluginList local;
+        juce::VST3PluginFormat fmt;
+        juce::PluginDirectoryScanner scanner (local, fmt, fmt.getDefaultLocationsToSearch(), true, juce::File());
+        juce::String nm;
+        while (scanner.scanNextFile (true, nm)) {}
+        juce::MessageManager::callAsync ([this, local, onDone]() mutable
+        {
+            pluginList = local;
+            scanning = false;
+            if (onDone) onDone (pluginList.getTypes().size());
+        });
+    });
+}
 
 juce::AudioPluginInstance* Engine::loadInstrumentOnTrack (Track& t, const juce::PluginDescription& desc)
 {
@@ -283,6 +400,7 @@ void Engine::startAudioRecording()
                    .getChildFile ("FBTECH_Recordings");
     dir.createDirectory();
     lastRecording = dir.getChildFile ("take_" + juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S") + ".wav");
+    recStart = position;
     recStream = std::make_unique<juce::FileOutputStream> (lastRecording);
     if (auto* w = wavFormat.createWriterFor (recStream.get(), sampleRate, 2, 16, {}, 0))
     {
@@ -295,7 +413,7 @@ void Engine::stopAudioRecordingAndAttach (Track& target)
 {
     { juce::ScopedLock sl (recLock); writer.reset(); }
     if (lastRecording.existsAsFile())
-        target.loadFile (lastRecording, audioFormatManager);
+        addAudioFileToTrack (target, lastRecording, recStart);
 }
 
 void Engine::startMidiRecording()
@@ -312,7 +430,7 @@ void Engine::stopMidiRecording()
 void Engine::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& msg)
 {
     if (! recording) return;
-    double now = getPosition();
+    double now = position;
     for (auto* t : tracks)
         if (t->armed && t->isMidi)
         {
@@ -338,7 +456,7 @@ bool Engine::exportToWav (const juce::File& outFile, std::function<void(double)>
     if (writerPtr == nullptr) return false;
     outStream.release();
 
-    play();
+    playing = true;
     juce::AudioBuffer<float> buf (2, blockSize);
     double totalBlocks = std::ceil (len * sampleRate / blockSize);
     for (long i = 0; i < (long) totalBlocks; ++i)
@@ -348,7 +466,7 @@ bool Engine::exportToWav (const juce::File& outFile, std::function<void(double)>
         if (progress) progress ((double) i / totalBlocks);
         juce::Thread::sleep (1);
     }
-    stop();
+    playing = false;
     setPosition (0.0);
     return true;
 }
