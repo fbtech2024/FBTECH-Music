@@ -7,14 +7,14 @@ namespace fbd
 // Palette grafica FBTECH (dal sito crea.css)
 struct Neon
 {
-    static const juce::Colour bg0    { 0xff031019 };
-    static const juce::Colour bg1    { 0xff04101a };
-    static const juce::Colour panel  { 0xff0a2a3c };
-    static const juce::Colour cyan   { 0xff2fd6ff };
-    static const juce::Colour pink   { 0xffff4fa3 };
-    static const juce::Colour green  { 0xff35f2a0 };
-    static const juce::Colour yellow { 0xffffd24d };
-    static const juce::Colour text   { 0xffcfe9f7 };
+    static inline const juce::Colour bg0    { 0xff031019 };
+    static inline const juce::Colour bg1    { 0xff04101a };
+    static inline const juce::Colour panel  { 0xff0a2a3c };
+    static inline const juce::Colour cyan   { 0xff2fd6ff };
+    static inline const juce::Colour pink   { 0xffff4fa3 };
+    static inline const juce::Colour green  { 0xff35f2a0 };
+    static inline const juce::Colour yellow { 0xffffd24d };
+    static inline const juce::Colour text   { 0xffcfe9f7 };
 };
 
 // Look and feel neon per tutta l'applicazione
