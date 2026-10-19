@@ -1,0 +1,40 @@
+name: Build FBTECH Music Windows
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Scarica i sorgenti
+        uses: actions/checkout@v4
+
+      - name: Scarica JUCE
+        run: git clone --depth 1 --branch 8.0.4 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Prepara compilatore Visual Studio (MSVC)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configura con CMake (Ninja + MSVC)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+
+      - name: Compila (Release)
+        run: cmake --build build
+
+      - name: Raccogli l'eseguibile
+        shell: pwsh
+        run: |
+          mkdir artefatto
+          $exe = Get-ChildItem -Path build -Recurse -Filter FBTECHMusic.exe | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName artefatto\ ; Write-Host "Trovato: $($exe.FullName)" } else { Write-Error "FBTECHMusic.exe non trovato" }
+
+      - name: Carica FBTECHMusic.exe come download
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBTECH-Music-Windows
+          path: artefatto/FBTECHMusic.exe
