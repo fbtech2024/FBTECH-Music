@@ -30,11 +30,11 @@ jobs:
         shell: pwsh
         run: |
           mkdir artefatto
-          $exe = Get-ChildItem -Path build -Recurse -Filter FBTECHMusic.exe | Select-Object -First 1
-          if ($exe) { Copy-Item $exe.FullName artefatto\ ; Write-Host "Trovato: $($exe.FullName)" } else { Write-Error "FBTECHMusic.exe non trovato" }
+          $exe = Get-ChildItem -Path build -Recurse -Filter *.exe | Select-Object -First 1
+          if ($exe) { Copy-Item $exe.FullName artefatto\ ; Write-Host "Trovato: $($exe.FullName)" } else { Write-Error "exe non trovato" }
 
-      - name: Carica FBTECHMusic.exe come download
+      - name: Carica l'eseguibile come download
         uses: actions/upload-artifact@v4
         with:
           name: FBTECH-Music-Windows
-          path: artefatto/FBTECHMusic.exe
+          path: artefatto
